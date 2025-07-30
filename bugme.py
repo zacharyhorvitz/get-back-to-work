@@ -22,10 +22,14 @@ def take_screenshot():
     os.makedirs(output_dir, exist_ok=True)
     filepath = os.path.join(output_dir, f"screenshot_{timestamp}.png")
 
-    with mss.mss() as sct:
-        sct.shot(output=filepath)
-        print(f"Saved screenshot to: {filepath}")
-    return filepath
+    try:
+        with mss.mss() as sct:
+            sct.shot(output=filepath)
+            print(f"Saved screenshot to: {filepath}")
+            return filepath
+    except Exception as e:
+        print(f"Error taking screenshot: {e}")
+        return None
 
 
 def write_info_about_screenshot(*, result, filepath):
@@ -72,17 +76,22 @@ def notify(*, title, message):
 
 def ollama_call(
     *,
-    filepath,
     model_name="llava:7b",
     prompt="What is this a screenshot of?",
+    filepath=None,
     **model_kwargs,
 ):
     """
     Call the ollama model with the given filepath, model_name, prompt, and model_kwargs.
     """
+
+    messages = [{'role': 'user', 'content': prompt}]
+    if filepath:
+        messages[0]['images'] = [filepath]
+
     response = ollama.chat(
         model=model_name,
-        messages=[{'role': 'user', 'content': prompt, 'images': [filepath]}],
+        messages=messages,
         options=model_kwargs,
     )
     return response['message']['content']
@@ -123,16 +132,23 @@ def main():
         type=str,
         default="Is there ANY social media (e.g. twitter, instagram, facebook, youtube, profiles, etc.) use in this screenshot? Yes or no?",
     )
-    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--caption_temperature", type=float, default=0.0)
     parser.add_argument("--buffer_size", type=int, default=5)
+    parser.add_argument(
+        "--motivation_prompt",
+        type=str,
+        default="Please respond with a short motivational message about working hard and not slacking off.",
+    )
+    parser.add_argument("--motivation_temperature", type=float, default=1.0)
 
     args = parser.parse_args()
     interval = args.interval
     buffer_size = args.buffer_size
     model_name = args.model_name
     prompt = args.prompt
-    temperature = args.temperature
-
+    caption_temperature = args.caption_temperature
+    motivation_prompt = args.motivation_prompt
+    motivation_temperature = args.motivation_temperature
     print(f"Taking screenshots every {interval} seconds. Press Ctrl+C to stop.")
     time.sleep(10)
     screen_history = []
@@ -144,20 +160,35 @@ def main():
                 clean_up_screenshot(filepath)
 
             filepath = take_screenshot()
-            screen_history.append(filepath)
+            if filepath:
+                screen_history.append(filepath)
 
-            result = check_for_slacking(
-                filepath=filepath,
-                model_name=model_name,
-                prompt=prompt,
-                temperature=temperature,
-            )
-            write_info_about_screenshot(result=result, filepath=filepath)
+                result = check_for_slacking(
+                    filepath=filepath,
+                    model_name=model_name,
+                    prompt=prompt,
+                    temperature=caption_temperature,
+                )
+                write_info_about_screenshot(result=result, filepath=filepath)
 
-            print(result['model_output'])
-            print(result['verdict'])
-            if result['verdict']:
-                notify(title="Excuse me...", message="GO BACK TO WORK!")
+                print(result['model_output'])
+                print(result['verdict'])
+                if result['verdict']:
+                    # notify(title="Excuse me...", message="GO BACK TO WORK!")
+                    motivational_message = ollama_call(
+                        model_name=model_name,
+                        prompt=motivation_prompt,
+                        temperature=motivation_temperature,
+                    )
+                    print(motivational_message)
+                    motivational_message = (
+                        motivational_message.encode('ascii', 'ignore')
+                        .decode('ascii')
+                        .replace('"', '')
+                    )
+
+                    # convert to
+                    notify(title="Excuse me...", message=motivational_message)
 
             time.sleep(interval)
     except KeyboardInterrupt:
